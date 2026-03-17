@@ -17,11 +17,12 @@ License: MIT
 import os
 import sys
 import json
+import glob
 import subprocess
 import tempfile
 from pathlib import Path
 
-__version__ = "1.2.0"
+__version__ = "1.4.1"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -340,10 +341,10 @@ def query_active_plugins(db_config):
     """Query all active plugins from the s_core_plugins table."""
     query = (
         "SELECT name, label, source, namespace, version, author, "
-        "DATE_FORMAT(COALESCE(changed, added), '%%Y-%%m-%%d %%H:%%i') as updated "
+        "DATE_FORMAT(COALESCE(update_date, installation_date), '%Y-%m-%d %H:%i') as updated "
         "FROM s_core_plugins "
         "WHERE active = 1 "
-        "ORDER BY COALESCE(changed, added) DESC"
+        "ORDER BY COALESCE(update_date, installation_date) DESC"
     )
 
     output = mysql_query(db_config, query)
@@ -741,7 +742,29 @@ def main():
     safe_name = plugin['name'].replace('/', '_').replace('\\', '_')
     output_file = desktop / f"SW5_Plugin_{safe_name}_source.txt"
 
-    print(f"\n{C.bold('[4/4]')} Exportiere Quellcode ...")
+    # ── Check for old export files ───────────────────────────────────
+    pattern = str(desktop / "SW5_Plugin_*_source.txt")
+    existing_exports = sorted(glob.glob(pattern))
+    # Exclude the file we're about to write
+    other_exports = [f for f in existing_exports if f != str(output_file)]
+
+    if other_exports:
+        print(f"\n  {C.yellow('Vorhandene Export-Dateien gefunden:')}")
+        for f in other_exports:
+            fsize = format_size(os.path.getsize(f))
+            print(f"    - {os.path.basename(f)} ({fsize})")
+        print()
+        try:
+            answer = input("  Alte Export-Dateien löschen? (j/N): ").strip().lower()
+            if answer in ('j', 'ja', 'y', 'yes'):
+                for f in other_exports:
+                    os.remove(f)
+                    print(f"    {C.red('✗')} {os.path.basename(f)} gelöscht")
+                print()
+        except (EOFError, KeyboardInterrupt):
+            print()
+
+    print(f"{C.bold('[4/4]')} Exportiere Quellcode ...")
     print(f"  Ziel: {C.bold(str(output_file))}")
 
     if export_plugin_source(plugin_path, plugin['name'], str(output_file)):
@@ -750,6 +773,14 @@ def main():
         print(f"    Datei:   {output_file}")
         print(f"    Größe:   {format_size(file_size)}")
         print(f"    Dateien: {len(source_files)}")
+
+        # Show ready-to-copy scp command
+        host_result = mysql_query(db_config, "SELECT host FROM s_core_shops WHERE main_id IS NULL LIMIT 1")
+        hostname = host_result.strip() if host_result and host_result.strip() else 'SERVER'
+        user = os.environ.get('USER', 'root')
+        scp_cmd = f"scp {user}@{hostname}:{output_file} ~/Desktop/"
+        print(f"\n  {C.bold('Auf deinem lokalen Rechner ausführen:')}")
+        print(f"  {C.cyan(scp_cmd)}")
         print()
     else:
         print(C.red("\n  Export fehlgeschlagen!"))
