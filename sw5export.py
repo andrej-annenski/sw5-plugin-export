@@ -108,46 +108,47 @@ class C:
 
 def find_shopware5_installations():
     """
-    Search common web directories for Shopware 5 installations.
-    A valid SW5 install has config.php + engine/Shopware/ directory.
+    Fast search for Shopware 5 installations.
+    Strategy: search for 'shopware.php' (unique to SW5, very few hits)
+    then validate via config.php and engine/Shopware/ directory.
     """
     installations = []
 
-    for search_path in SEARCH_PATHS:
-        if not os.path.isdir(search_path):
-            continue
-        try:
-            result = subprocess.run(
-                ['find', search_path,
-                 '-maxdepth', str(MAX_SEARCH_DEPTH),
-                 '-name', 'config.php',
-                 '-type', 'f',
-                 '-not', '-path', '*/vendor/*',
-                 '-not', '-path', '*/node_modules/*'],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                universal_newlines=True, timeout=60
-            )
-            for config_path in result.stdout.strip().split('\n'):
-                config_path = config_path.strip()
-                if not config_path:
-                    continue
-                shop_dir = os.path.dirname(config_path)
+    # Single find across all search paths — look for shopware.php (unique to SW5)
+    # This is orders of magnitude faster than searching for generic 'config.php'
+    existing_paths = [p for p in SEARCH_PATHS if os.path.isdir(p)]
+    if not existing_paths:
+        return []
 
-                # Must have engine/Shopware/ to be Shopware 5
-                engine_dir = os.path.join(shop_dir, 'engine', 'Shopware')
-                if not os.path.isdir(engine_dir):
-                    continue
+    try:
+        cmd = ['find'] + existing_paths + [
+            '-maxdepth', str(MAX_SEARCH_DEPTH),
+            '-name', 'shopware.php',
+            '-type', 'f',
+        ]
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True, timeout=30
+        )
+        for hit in result.stdout.strip().split('\n'):
+            hit = hit.strip()
+            if not hit:
+                continue
+            shop_dir = os.path.dirname(hit)
 
-                # Extra verification: check for shopware.php or autoload.php
-                has_shopware_php = os.path.isfile(os.path.join(shop_dir, 'shopware.php'))
-                has_autoload = os.path.isfile(os.path.join(shop_dir, 'autoload.php'))
-                if has_shopware_php or has_autoload:
-                    installations.append(shop_dir)
+            # Validate: must have config.php and engine/Shopware/
+            if not os.path.isfile(os.path.join(shop_dir, 'config.php')):
+                continue
+            if not os.path.isdir(os.path.join(shop_dir, 'engine', 'Shopware')):
+                continue
 
-        except subprocess.TimeoutExpired:
-            print(C.yellow(f"  Warnung: Suche in {search_path} dauerte zu lange, übersprungen."))
-        except Exception as e:
-            print(C.yellow(f"  Warnung: Fehler bei Suche in {search_path}: {e}"))
+            installations.append(shop_dir)
+
+    except subprocess.TimeoutExpired:
+        print(C.yellow("  Warnung: Suche dauerte zu lange."))
+    except Exception as e:
+        print(C.yellow(f"  Warnung: Fehler bei der Suche: {e}"))
 
     # Deduplicate and sort
     return sorted(set(installations))
