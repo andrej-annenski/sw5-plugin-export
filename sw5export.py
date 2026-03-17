@@ -21,7 +21,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -106,16 +106,64 @@ class C:
 # Step 1: Find Shopware 5 Installations
 # ─────────────────────────────────────────────────────────────────────────────
 
+def is_valid_shopware5(path):
+    """Validate that a directory is a real Shopware 5 installation."""
+    return (
+        os.path.isfile(os.path.join(path, 'shopware.php')) and
+        os.path.isfile(os.path.join(path, 'config.php')) and
+        os.path.isdir(os.path.join(path, 'engine', 'Shopware'))
+    )
+
+
 def find_shopware5_installations():
     """
-    Fast search for Shopware 5 installations.
-    Strategy: search for 'shopware.php' (unique to SW5, very few hits)
-    then validate via config.php and engine/Shopware/ directory.
+    Fast two-phase search for Shopware 5 installations.
+    Phase 1: Walk common webroot paths 3 levels deep via os.listdir (instant).
+    Phase 2: Only if nothing found, use 'find' with heavy exclusions as fallback.
     """
     installations = []
 
-    # Single find across all search paths — look for shopware.php (unique to SW5)
-    # This is orders of magnitude faster than searching for generic 'config.php'
+    # ── Phase 1: Direct directory walk (no subprocess, instant) ──────
+    for base in SEARCH_PATHS:
+        if not os.path.isdir(base):
+            continue
+        if is_valid_shopware5(base):
+            installations.append(base)
+            continue
+        try:
+            for e1 in os.listdir(base):
+                l1 = os.path.join(base, e1)
+                if not os.path.isdir(l1):
+                    continue
+                if is_valid_shopware5(l1):
+                    installations.append(l1)
+                    continue
+                try:
+                    for e2 in os.listdir(l1):
+                        l2 = os.path.join(l1, e2)
+                        if not os.path.isdir(l2):
+                            continue
+                        if is_valid_shopware5(l2):
+                            installations.append(l2)
+                            continue
+                        try:
+                            for e3 in os.listdir(l2):
+                                l3 = os.path.join(l2, e3)
+                                if os.path.isdir(l3) and is_valid_shopware5(l3):
+                                    installations.append(l3)
+                        except (PermissionError, OSError):
+                            pass
+                except (PermissionError, OSError):
+                    pass
+        except (PermissionError, OSError):
+            pass
+
+    if installations:
+        return sorted(set(installations))
+
+    # ── Phase 2: Fallback — find with heavy exclusions ───────────────
+    print(C.dim("       Direkte Prüfung erfolglos, starte erweiterte Suche ..."))
+
     existing_paths = [p for p in SEARCH_PATHS if os.path.isdir(p)]
     if not existing_paths:
         return []
@@ -125,32 +173,31 @@ def find_shopware5_installations():
             '-maxdepth', str(MAX_SEARCH_DEPTH),
             '-name', 'shopware.php',
             '-type', 'f',
+            '-not', '-path', '*/vendor/*',
+            '-not', '-path', '*/node_modules/*',
+            '-not', '-path', '*/.git/*',
+            '-not', '-path', '*/cache/*',
+            '-not', '-path', '*/media/*',
+            '-not', '-path', '*/files/*',
         ]
         result = subprocess.run(
             cmd,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            universal_newlines=True, timeout=30
+            universal_newlines=True, timeout=60
         )
         for hit in result.stdout.strip().split('\n'):
             hit = hit.strip()
             if not hit:
                 continue
             shop_dir = os.path.dirname(hit)
-
-            # Validate: must have config.php and engine/Shopware/
-            if not os.path.isfile(os.path.join(shop_dir, 'config.php')):
-                continue
-            if not os.path.isdir(os.path.join(shop_dir, 'engine', 'Shopware')):
-                continue
-
-            installations.append(shop_dir)
+            if is_valid_shopware5(shop_dir):
+                installations.append(shop_dir)
 
     except subprocess.TimeoutExpired:
-        print(C.yellow("  Warnung: Suche dauerte zu lange."))
+        print(C.yellow("  Warnung: Erweiterte Suche dauerte zu lange."))
     except Exception as e:
         print(C.yellow(f"  Warnung: Fehler bei der Suche: {e}"))
 
-    # Deduplicate and sort
     return sorted(set(installations))
 
 
