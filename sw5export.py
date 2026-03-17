@@ -124,7 +124,8 @@ def find_shopware5_installations():
                  '-type', 'f',
                  '-not', '-path', '*/vendor/*',
                  '-not', '-path', '*/node_modules/*'],
-                capture_output=True, text=True, timeout=60
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                universal_newlines=True, timeout=60
             )
             for config_path in result.stdout.strip().split('\n'):
                 config_path = config_path.strip()
@@ -197,7 +198,8 @@ def read_shopware_config(shop_dir):
     try:
         result = subprocess.run(
             ['php', '-r', php_code],
-            capture_output=True, text=True, timeout=10,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            universal_newlines=True, timeout=10,
             cwd=shop_dir  # Some configs use relative paths
         )
         if result.returncode != 0:
@@ -258,7 +260,8 @@ def mysql_query(db_config, query):
             '-e', query
         ]
 
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               universal_newlines=True, timeout=15)
 
         if result.returncode != 0:
             stderr = result.stderr.strip()
