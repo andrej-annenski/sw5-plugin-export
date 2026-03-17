@@ -21,7 +21,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Configuration
@@ -339,10 +339,11 @@ def mysql_query(db_config, query):
 def query_active_plugins(db_config):
     """Query all active plugins from the s_core_plugins table."""
     query = (
-        "SELECT name, label, source, namespace, version, author "
+        "SELECT name, label, source, namespace, version, author, "
+        "DATE_FORMAT(COALESCE(changed, added), '%%Y-%%m-%%d %%H:%%i') as updated "
         "FROM s_core_plugins "
         "WHERE active = 1 "
-        "ORDER BY name ASC"
+        "ORDER BY COALESCE(changed, added) DESC"
     )
 
     output = mysql_query(db_config, query)
@@ -362,6 +363,7 @@ def query_active_plugins(db_config):
                 'namespace': parts[3] if len(parts) > 3 else '',
                 'version':   parts[4] if len(parts) > 4 else '',
                 'author':    parts[5] if len(parts) > 5 else '',
+                'updated':   parts[6] if len(parts) > 6 else '',
             })
 
     return plugins
@@ -638,26 +640,75 @@ def main():
     print(f"  {C.green('✓')} {C.bold(str(len(plugins)))} aktive(s) Plugin(s) gefunden.")
 
     # ── Step 4: Select plugin ────────────────────────────────────────────
-    def format_plugin(p):
-        ver = p['version']
-        src = p['source']
-        ns = p['namespace']
-        auth = p['author']
-        parts = [
-            C.bold(p['name']),
-            C.dim('v' + ver),
-            '- ' + p['label'],
-            C.dim('[' + src + '/' + ns + ']'),
-        ]
-        if auth:
-            parts.append(C.dim('von ' + auth))
-        return ' '.join(parts)
+    def print_plugin_table(plugins):
+        """Print plugins as a formatted table."""
+        # Column widths (dynamic based on content)
+        w_nr = len(str(len(plugins)))
+        w_name = max(len(p['name']) for p in plugins)
+        w_label = max(len(p['label']) for p in plugins)
+        w_ver = max(len(p['version']) for p in plugins)
+        w_auth = max(len(p['author']) for p in plugins)
+        w_date = 16  # "2025-01-15 14:30"
 
-    plugin = select_from_list(
-        "[3/4] Plugin zum Exportieren auswählen:",
-        plugins,
-        format_func=format_plugin
-    )
+        # Cap label and author width for readability
+        w_name = min(w_name, 35)
+        w_label = min(w_label, 30)
+        w_auth = min(w_auth, 20)
+        w_ver = max(w_ver, 7)
+
+        # Header
+        hdr_nr = '#'.rjust(w_nr)
+        hdr = (
+            f"  {hdr_nr}  "
+            f"{'Name':<{w_name}}  "
+            f"{'Label':<{w_label}}  "
+            f"{'Version':<{w_ver}}  "
+            f"{'Autor':<{w_auth}}  "
+            f"{'Aktualisiert':<{w_date}}"
+        )
+        sep = '  ' + '─' * (len(hdr) - 2)
+
+        print(f"\n{C.bold('[3/4] Aktive Plugins (sortiert nach Aktualisierungsdatum):')}\n")
+        print(C.bold(hdr))
+        print(sep)
+
+        for i, p in enumerate(plugins, 1):
+            nr = str(i).rjust(w_nr)
+            name = p['name'][:w_name].ljust(w_name)
+            label = p['label'][:w_label].ljust(w_label)
+            ver = p['version'][:w_ver].ljust(w_ver)
+            auth = p['author'][:w_auth].ljust(w_auth)
+            date = p['updated'].ljust(w_date)
+
+            print(
+                f"  {C.cyan(nr)}  "
+                f"{C.bold(name)}  "
+                f"{label}  "
+                f"{ver}  "
+                f"{C.dim(auth)}  "
+                f"{C.dim(date)}"
+            )
+
+        print(sep)
+        print()
+
+    print_plugin_table(plugins)
+
+    while True:
+        try:
+            raw = input(f"  Plugin-Nr. auswählen (1-{len(plugins)}): ").strip()
+            if not raw:
+                continue
+            idx = int(raw) - 1
+            if 0 <= idx < len(plugins):
+                plugin = plugins[idx]
+                break
+            print(C.yellow(f"  Bitte eine Zahl zwischen 1 und {len(plugins)} eingeben."))
+        except ValueError:
+            print(C.yellow("  Bitte eine gültige Zahl eingeben."))
+        except (EOFError, KeyboardInterrupt):
+            print(C.yellow("\n  Abgebrochen."))
+            sys.exit(0)
 
     # ── Resolve plugin directory ─────────────────────────────────────────
     plugin_path = resolve_plugin_path(shop_dir, plugin)
